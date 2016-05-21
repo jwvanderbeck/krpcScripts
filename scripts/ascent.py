@@ -28,6 +28,7 @@ altitude = connection.add_stream(getattr, vessel.flight(), 'mean_altitude')
 apoapsis = connection.add_stream(getattr, vessel.orbit, 'apoapsis_altitude')
 periapsis = connection.add_stream(getattr, vessel.orbit, 'periapsis_altitude')
 eccentricity = connection.add_stream(getattr, vessel.orbit, 'eccentricity')
+surfaceSpeed = connection.add_stream(getattr, vessel.flight(vessel.orbit.body.reference_frame), 'speed')
 
 # Pre-launch setup
 vessel.control.sas = False
@@ -110,14 +111,17 @@ vessel.control.activate_next_stage()
 turn_start_altitude = 500
 turn_end_altitude = 160000
 turn_angle = 0
-print "Starting gravity turn"
-while True:
-	# Gravity turn
+while altitude() < turn_end_altitude:
+	pass
+	time.sleep(5)
+	if surfaceSpeed() < args.turnStart:
+		print "Surface velocity {0}m/s, waiting for {1}m/s to begin turn.".format(surfaceSpeed(), args.turnStart)
+		time.sleep(1)
 	if altitude() > turn_start_altitude and altitude() < turn_end_altitude:
 		frac = (altitude() - turn_start_altitude) / (turn_end_altitude - turn_start_altitude)
-		print frac
+		print "Turn fraction: ", frac
 		new_turn_angle = frac * 90
-		print new_turn_angle
+		print "Calculated new turn angle: ", new_turn_angle
 		if abs(new_turn_angle - turn_angle) > 0.1:
 			turn_angle = new_turn_angle
 			vessel.auto_pilot.target_pitch_and_heading(90-turn_angle, 90)
