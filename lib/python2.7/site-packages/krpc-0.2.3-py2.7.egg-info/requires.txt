@@ -1,0 +1,2 @@
+protobuf == 3.0.0b2
+enum34 >= 0.9
