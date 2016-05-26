@@ -6,6 +6,7 @@ import sys
 import curses
 import os
 import utility
+import numpy
 
 parser = argparse.ArgumentParser(description='Handles rocket ascent, gravity turn, and insertion into orbit')
 parser.add_argument('--ignition-time', "-ignition", type=int, dest='ignitionTime', default=5)
@@ -17,6 +18,7 @@ parser.add_argument('--thrust-req', '-thrust', type=float, dest='thrustThreshold
 parser.add_argument('--turn-start', '-turn', type=float, dest='turnStart', default=90)
 parser.add_argument('--target-ap', '-ap', type=float, dest='targetAP', default=185000.00)
 parser.add_argument('--max-pitchmod', '-maxpitch', type=float, dest='maxPitchMod', default=30.00)
+parser.add_argument('--insertion-stage', '-ostage', type=int, dest='insertionStage', default=-1)
 args = parser.parse_args()
 
 
@@ -39,9 +41,29 @@ orbitalSpeed = connection.add_stream(getattr, vessel.flight(vessel.orbit.body.no
 vessel.control.sas = False
 vessel.control.rcs = False
 vessel.control.throttle = 1
-
 # FlightData utility
 fd = utility.FlightData(vessel)
+
+if args.insertionStage == -1:
+	# best guess to determine which stage is the insertion stage.  
+	# This will assume a two stage vehicle with the second stage being the insertion stage
+	print "Trying to auto-detect insertion stage (assumes two stage vehicle)..."
+	# this will essentially start at the bottom of the rocket, and walk up each stage with engines in it
+	# It will attempt to ignore ullage/retros by looking at stage burn time
+	stageToCheck = vessel.control.current_stage - 1
+	stagesFound = 0
+	stageTarget = 2
+	if args.useBoosters:
+		stageTarget = 3
+	while stageToCheck >= 0:
+		if fd.StageBurnTime(stageToCheck) > 30:
+			stagesFound++
+		stageToCheck--
+		if stagesFound == stageTarget:
+			args.insertionStage = stageToCheck
+			print "\tStage {0} detected as insertion stage.  If this is not correct, then manually specify insertion stage with the --insertion-stage paramaeter".format(args.insertionStage)
+			break
+
 
 allEngineParts = vessel.parts.with_module("ModuleEnginesRF")
 firstStage = vessel.control.current_stage - 1
@@ -142,11 +164,11 @@ previousFlightData = {
 	'targetApoapsisHit' : False
 }
 currentFlightData = dict(previousFlightData)
-loopTime = 0.5
+loopTime = 1
 # PEG test
 peg = PEG(185) # target a 185km orbit
 peg.updateState()
-
+pegInit = False
 while not inOrbit:
 	# Calculate new data
 	currentFlightData['surfaceSpeed'] = surfaceSpeed()
@@ -162,18 +184,26 @@ while not inOrbit:
 	timeToInsertion = (targetOrbitalSpeed - currentFlightData['orbitalSpeed']) / orbitalVelocityDelta
 	apDelta = (currentFlightData['apoapsis'] - previousFlightData['apoapsis']) * (1 / loopTime)
 	timeToTargetAP = (args.targetAP - currentFlightData['apoapsis']) / apDelta
+	if not pegInit:
+		p = peg.peg(0, 0, fd.StageBurnTime(3))
+	else:
+		p = peg.peg(p[0], p[1], p[3])
 
 	# determine mode
 	if currentFlightData['surfaceSpeed'] < args.turnStart:
 		currentMode = "ASCENT"
-	elif currentFlightData['surfaceSpeed'] >= args.turnStart and currentFlightData['surfaceSpeed'] < 1000.0:
+	elif currentFlightData['surfaceSpeed'] >= args.turnStart:# and currentFlightData['surfaceSpeed'] < 1000.0:
 		currentMode = "PITCH PROGRAM MOD1"
-	elif currentFlightData['surfaceSpeed'] >= 1000.0 and not currentFlightData['targetApoapsisHit']:
-		currentMode = "PITCH PROGRAM MOD2"
-	elif currentFlightData['targetApoapsisHit'] and currentFlightData['orbitalSpeed'] < targetOrbitalSpeed - 1000.0:
-		currentMode = ['APOAPSIS MOD1']
-	elif currentFlightData['targetApoapsisHit'] and currentFlightData['orbitalSpeed'] < targetOrbitalSpeed:
-		currentMode = ['INSERTION']
+	# elif currentFlightData['surfaceSpeed'] >= 1000.0 and not currentFlightData['targetApoapsisHit']:
+	# 	currentMode = "PITCH PROGRAM MOD2"
+	# elif currentFlightData['targetApoapsisHit'] and currentFlightData['orbitalSpeed'] < targetOrbitalSpeed - 1000.0:
+	# 	currentMode = ['APOAPSIS MOD1']
+	# elif currentFlightData['targetApoapsisHit'] and currentFlightData['orbitalSpeed'] < targetOrbitalSpeed:
+	# 	currentMode = ['INSERTION']
+
+	# PEG overrides all else
+	if vessel.control.current_stage == args.insertionStage:
+		currentMode = ['PEG']
 
 	if currentFlightData['periapsis'] >= 180000:
 		inOrbit = True
@@ -188,7 +218,7 @@ while not inOrbit:
 		print "Acceleration: {0}m/s".format(round(surfaceVelocityDelta, 2))
 		if currentMode == 'ASCENT':
 			print "TT Pitch Program: {0} seconds".format( round((args.turnStart - currentFlightData['surfaceSpeed']) / surfaceVelocityDelta, 2) )
-	if currentMode in ['PITCH PROGRAM MOD1', 'PITCH PROGRAM MOD2', 'APOAPSIS MOD1', 'INSERTION']:
+	if currentMode in ['PITCH PROGRAM MOD1', 'PITCH PROGRAM MOD2', 'APOAPSIS MOD1', 'INSERTION', 'PEG']:
 		print ""
 		print "ORBIT"
 		print "====="
@@ -207,16 +237,19 @@ while not inOrbit:
 
 	print "PEG"
 	print "==="
-
+	print "A:", p[0]
+	print "B":, p[1]
+	print "C":, p[2]
+	print "Time to cutoff {0} seconds".format(p[3])
 
 	# Determine base pitch.  This is calculated to get us to 45 degrees at roughly 1km/s (1083 m/s to be exact) and 0 pitch close to orbital speed (7848 m/s to be exact)
-	if currentMode != "ASCENT":
+	if currentMode not in ["ASCENT", "PEG"]:
 		if currentMode == "PITCH PROGRAM MOD1":
 			speed = currentFlightData['surfaceSpeed']
 		else
 			speed = currentFlightData['orbitalSpeed']
-		# currentFlightData['pitch'] = 90 - 3.9 * pow( (speed - 45), 0.35 )
-		currentFlightData['pitch'] = 90 - 2.5 * pow( (speed - 45), 0.4 )
+		currentFlightData['pitch'] = 90 - 1.4 * pow((surfaceSpeed() - 45),0.5)
+		# currentFlightData['pitch'] = 90 - 2.5 * pow( (speed - 45), 0.4 )
 	if not currentFlightData['targetApoapsisHit']:
 		if currentFlightData['apoapsis'] >= args.targetAP:
 			currentFlightData['targetApoapsisHit'] = True
@@ -236,12 +269,31 @@ while not inOrbit:
 			currentFlightData['pitchMod'] -= 1.0
 
 	# apply pitch and pitch mod
-	if currentMode != "ASCENT":
+	if currentMode not in ["ASCENT", "PEG"]:
 		if currentFlightData['pitchMod'] < -args.maxPitchMod:
 			currentFlightData['pitchMod'] = -args.maxPitchMod
 		if currentFlightData['pitchMod'] > args.maxPitchMod:
 			currentFlightData['pitchMod'] = args.maxPitchMod
 		finalPitchAngle = currentFlightData['pitch'] + currentFlightData['pitchMod']
+		vessel.auto_pilot.target_pitch_and_heading(finalPitchAngle, 90)
+
+	# If we are in PEG mode, we first need to see if guidance has converged
+	# and if it has, we use the PEG guidance for pitch
+	if currentMode == "PEG":
+		if abs( (T - 2 * peg.cycleRate) / p[3] - 1 ) < 2 / 100:
+			peg.convergedGuidanceSamples++
+			if peg.convergedGuidanceSamples >= 3:
+				peg.guidanceConverged = True
+		else:
+			peg.convergedGuidanceSamples--
+			peg.guidanceConverged = False
+
+		if peg.guidanceConverged:
+			currentFlightData['pitch'] = A - B * peg.cycleRate + C
+			currentFlightData['pitch'] = max(-1, min(currentFlightData['pitch'], 1))
+			currentFlightData['pitch'] = numpy.arcsin(currentFlightData['pitch'])
+			currentFlightData['pitch'] *= 90
+
 		vessel.auto_pilot.target_pitch_and_heading(finalPitchAngle, 90)
 
 	# store current flight data as last flight data for use next loop

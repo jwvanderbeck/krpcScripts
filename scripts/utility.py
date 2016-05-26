@@ -9,23 +9,36 @@ class FlightData(object):
 		self.initialized = True
 		self.vessel = vessel
 
-	def CurrentStageTWR(self, vessel):
+	def CurrentStageTWR(self):
+		vessel = self.vessel
 		currentThrust = vessel.available_thrust
 		g = vessel.orbit.body.surface_gravity
 		twr = currentThrust / (vessel.mass*g)
 		return twr
 
-	def StageBurnTime(Self, vessel, stage):
+	def StageVacuumSpecificImpulse(self, stage):
+		vessel = self.vessel
+		allEngineParts = vessel.parts.with_module("ModuleEnginesRF")
+		for part in allEngineParts:
+			if part.stage == stage:
+				thrust += part.engine.max_thrust
+				fuelConsumption = fuelConsumption + (part.engine.max_thrust / part.engine.vacuum_specific_impulse)
+		if fuelConsumption <= 0.0:
+			return 0.0
+		else
+			return thrust / fuelConsumption
+
+
+	def StageBurnTime(self, stage):
 		# tonnes of propellant * Isp * 9.80665 / thrust
 		# build a list of propellants used by all engines in the stage
-		Isp = 0 # seconds
+		vessel = self.vessel
+		Isp = self.StageVacuumSpecificImpulse() # seconds
 		thrust = 0 # newtons
 		allEngineParts = vessel.parts.with_module("ModuleEnginesRF")
 		stagePropellants = []
 		for part in allEngineParts:
 			if part.stage == stage:
-				if Isp == 0:
-					Isp = part.engine.vacuum_specific_impulse
 				thrust += part.engine.max_thrust
 				for prop in stage.engine.propellants:
 					if not prop in stagePropellants:
@@ -48,6 +61,8 @@ class PEG(object):
 		self.epsilon = 3
 		self.cycleRate = 1
 		self.targetOrbit = targetOrbit * 1000.0 + 6371000.0
+		self.guidanceConverged = False
+		self.convergedGuidanceSamples = 0
 
 	def updateState(self, vessel, connection):
 		self.altitude = umpy.linalg.norm(vessel.position(vessel.orbit.body.reference_frame))	# from center of body, not SL
