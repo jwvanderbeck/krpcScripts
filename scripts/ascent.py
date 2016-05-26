@@ -113,12 +113,23 @@ if availableThrust <= g * vessel.mass * args.liftoffTWR:
 print "Liftoff!"
 vessel.control.activate_next_stage()
 
+
+# [21:12:43] <NathanKell> I _think_ what you would need is the following.
+# [21:12:47] <NathanKell> Let's assume a 2-stage vehicle
+# [21:13:19] <NathanKell> You will need, on first stage burnout, a time to apogee which, combined with further stretching of your orbit due to velocity increment, is >= required burn time of second stage.
+# [21:13:45] <NathanKell> At simplest, we will assume we will circularize at apogee rather than after.
+# [21:14:21] <NathanKell> _as a rule of thumb_ that means a minute lower time to apogee than your stage burn time (for these high-TWR stages)
+# [21:14:42] <NathanKell> _also_ the apogee created by the first stage must not be higher than the desired final perigee.
+# [21:15:09] <NathanKell> its distance from the final perigee will presumably be a function of the velocity vector at burnout.
+# [21:16:04] <NathanKell> so your program needs to do two things.
+# [21:17:24] <NathanKell> It needs to handle the first stage (calculating that apogee, and flying the first stage to procure it) and it needs to handle the second stage (managing pitch such that you hit your desired insertion altitude at 0m/s vertical velocity and at [circular orbital velocity at that height] horizontal velocity)
+
 turn_start_altitude = 500
 turn_end_altitude = 185000
 turn_angle = 0
 targetOrbitalSpeed = 7797.33 # for a 185x185 orbit
 angleModifier = 0.0
-lastAP = 0
+lastAP = -100
 lastSpeed = 0
 inOrbit = False
 previousFlightData = {
@@ -132,6 +143,10 @@ previousFlightData = {
 }
 currentFlightData = dict(previousFlightData)
 loopTime = 0.5
+# PEG test
+peg = PEG(185) # target a 185km orbit
+peg.updateState()
+
 while not inOrbit:
 	# Calculate new data
 	currentFlightData['surfaceSpeed'] = surfaceSpeed()
@@ -160,6 +175,10 @@ while not inOrbit:
 	elif currentFlightData['targetApoapsisHit'] and currentFlightData['orbitalSpeed'] < targetOrbitalSpeed:
 		currentMode = ['INSERTION']
 
+	if currentFlightData['periapsis'] >= 180000:
+		inOrbit = True
+		break;
+
 	# Data blocks
 	print "MODE:", currentMode
 	if currentMode in ['ASCENT', 'PITCH PROGRAM MOD1', 'PITCH PROGRAM MOD2']:
@@ -186,9 +205,18 @@ while not inOrbit:
 	print "Pitch set: {0} degrees".format(round(currentFlightData['pitch'],2))
 	print "Pitch mod: {0} degrees".format(round(currentFlightData['pitchMod'],2))
 
+	print "PEG"
+	print "==="
+
+
 	# Determine base pitch.  This is calculated to get us to 45 degrees at roughly 1km/s (1083 m/s to be exact) and 0 pitch close to orbital speed (7848 m/s to be exact)
 	if currentMode != "ASCENT":
-		currentFlightData['pitch'] = 90 - 3.9 * pow( (currentFlightData['surfaceSpeed'] - 45), 0.35 )
+		if currentMode == "PITCH PROGRAM MOD1":
+			speed = currentFlightData['surfaceSpeed']
+		else
+			speed = currentFlightData['orbitalSpeed']
+		# currentFlightData['pitch'] = 90 - 3.9 * pow( (speed - 45), 0.35 )
+		currentFlightData['pitch'] = 90 - 2.5 * pow( (speed - 45), 0.4 )
 	if not currentFlightData['targetApoapsisHit']:
 		if currentFlightData['apoapsis'] >= args.targetAP:
 			currentFlightData['targetApoapsisHit'] = True
