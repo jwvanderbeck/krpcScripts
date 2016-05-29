@@ -17,6 +17,8 @@ class FlightData(object):
 		return twr
 
 	def StageVacuumSpecificImpulse(self, stage):
+		thrust = 0
+		fuelConsumption = 0
 		vessel = self.vessel
 		allEngineParts = vessel.parts.with_module("ModuleEnginesRF")
 		for part in allEngineParts:
@@ -25,7 +27,7 @@ class FlightData(object):
 				fuelConsumption = fuelConsumption + (part.engine.max_thrust / part.engine.vacuum_specific_impulse)
 		if fuelConsumption <= 0.0:
 			return 0.0
-		else
+		else:
 			return thrust / fuelConsumption
 
 
@@ -33,55 +35,65 @@ class FlightData(object):
 		# tonnes of propellant * Isp * 9.80665 / thrust
 		# build a list of propellants used by all engines in the stage
 		vessel = self.vessel
-		Isp = self.StageVacuumSpecificImpulse() # seconds
+		Isp = self.StageVacuumSpecificImpulse(stage) # seconds
 		thrust = 0 # newtons
 		allEngineParts = vessel.parts.with_module("ModuleEnginesRF")
 		stagePropellants = []
 		for part in allEngineParts:
 			if part.stage == stage:
 				thrust += part.engine.max_thrust
-				for prop in stage.engine.propellants:
+				for prop in part.engine.propellants:
 					if not prop in stagePropellants:
 						stagePropellants.append(prop)
 		# get a list of all resources in the stage
-		allResources = vessel.resources_in_decouple_stage(stage, cumulative = False).all
+		allResources = vessel.resources_in_decouple_stage(stage, cumulative = True).all
 		propellantMass = 0
 		for resource in allResources:
-				propellantMass += (resource.amount * resource.density)
-		return propellantMass * Isp * 9.80665 / thrust
+				if resource.name in stagePropellants:
+					propellantMass += (resource.amount * resource.density)
+		if thrust > 0.0:
+			return propellantMass * Isp * 9.80665 / thrust
+		else:
+			return 0.0
 
 
 # PEG code adapted from the kOS scripts here:
 # https://github.com/Noiredd/PEGAS
 def square(a):
-	return numpy.pow(a, 2)
+	return numpy.power(a, 2)
 
 class PEG(object):
-	def __init__(self, targetOrbit):
+	def __init__(self, targetOrbit = 185000.0, loopTime = 1.0):
 		self.epsilon = 3
 		self.cycleRate = 1
-		self.targetOrbit = targetOrbit * 1000.0 + 6371000.0
+		self.targetOrbit = targetOrbit + 6371000.0
 		self.guidanceConverged = False
 		self.convergedGuidanceSamples = 0
 
 	def updateState(self, vessel, connection):
-		self.altitude = umpy.linalg.norm(vessel.position(vessel.orbit.body.reference_frame))	# from center of body, not SL
-		self.velocity = vessel.flight(vessel.orbit.body.non_rotating_reference_frame).horizontal_speed
+		self.altitude = numpy.linalg.norm(vessel.position(vessel.orbit.body.reference_frame))	# from center of body, not SL
+		# self.velocity = vessel.flight(vessel.orbit.body.non_rotating_reference_frame).horizontal_speed
+		self.velocity = math.sqrt(square(vessel.flight(vessel.orbit.body.non_rotating_reference_frame).speed) - square(vessel.flight(vessel.orbit.body.non_rotating_reference_frame).vertical_speed))
 		self.verticalVelocity = vessel.flight(vessel.orbit.body.non_rotating_reference_frame).vertical_speed
-		self.angle = numpy.arctan(self.velocity, self.verticalVelocity)
+		self.angle = numpy.arctan2(self.velocity, self.verticalVelocity)
 		self.thrust = vessel.thrust
 		self.acceleration = self.thrust / vessel.mass
 		self.isp = vessel.specific_impulse
+		if self.isp == 0:
+			self.isp = vessel.vacuum_specific_impulse
 		if self.thrust > 0:
-			self.exhaustVelocity = self.isp * 9.80665 / self.thrust
+			self.exhaustVelocity = self.isp * 9.80665# / self.thrust
 		else:
-			self.exhaustVelocity = 0
+			self.exhaustVelocity = 0.01
 		self.mu = vessel.orbit.body.gravitational_parameter
 
 	def msolve(self, tau, oldT, gain):
 		
-		b0 = -self.exhaustVelocity * math.log(1 - oldT / tau)
-		b1 = b8 * tau - self.exhaustVelocity * oldT
+		if tau == 0.0:
+			tau = 0.01
+		x = max(0.01, min(1, 1-oldT/tau))
+		b0 = -self.exhaustVelocity * math.log(x)
+		b1 = b0 * tau - self.exhaustVelocity * oldT
 
 		c0 = b0 * oldT - b1
 		c1 = c0 * tau - self.exhaustVelocity * square(oldT) / 2
@@ -97,13 +109,13 @@ class PEG(object):
 	def peg(self, oldA, oldB, oldT):
 
 		tau = self.exhaustVelocity / self.acceleration
-		a=b=c=t=0
+		A=B=C=T=0
 
-		if oldA = 0 and oldB = 0:
+		if oldA == 0 and oldB == 0:
 			oldA, oldB = self.msolve(tau, oldT, self.targetOrbit - self.altitude)
 
 		# angular momentum
-		angM = numpy.linalg.norm(numpy.cross([self.altitude, 0, 0], =[self.verticalVelocity, self.velocity, 0]))
+		angM = numpy.linalg.norm(numpy.cross([self.altitude, 0, 0], [self.verticalVelocity, self.velocity, 0]))
 		tgtV = numpy.sqrt(self.mu/self.targetOrbit)
 		tgtM = numpy.linalg.norm(numpy.cross([self.targetOrbit, 0, 0], [0, tgtV, 0]))
 		dMom = tgtM - angM
