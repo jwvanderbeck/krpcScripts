@@ -1,0 +1,16 @@
+{
+	stages = [
+		{
+			'name' : 'First Stage',
+			'stageNumber' : 6,
+			'guidanceType' : 'pitch'
+			'engines' : ['liquidEngine'],
+			'guidanceParameters' : {
+				'pitchTargets' : [
+					{ 45.0 : 1000.0 }
+					{ 0.0  : 3000.0 }
+				]
+			}
+		}
+	]
+}

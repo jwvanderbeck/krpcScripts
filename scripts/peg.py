@@ -3,7 +3,13 @@ import time
 import math
 import sys
 import numpy
-import orbitalMechanics
+
+"""
+Navigation is responsible for maintining the craft's navigation state such as position, velocity, etc.
+It is a digital analogue to and Inertial guidance system
+"""
+class Navigation(object):
+
 
 class FlightData(object):
 	def __init__(self, vessel):
@@ -85,6 +91,7 @@ class PEG(object):
 		self.verticalVelocity = connection.add_stream(getattr, vessel.flight(vessel.orbit.body.non_rotating_reference_frame), 'vertical_speed')
 		self.mu = -1.0
 
+
 	def StageVacuumSpecificImpulse(self, stage):
 		print "Calculating Isp for stage {0}".format(stage)
 		vessel = self.vessel
@@ -108,10 +115,10 @@ class PEG(object):
 		# self.velocity = vessel.flight(vessel.orbit.body.non_rotating_reference_frame).horizontal_speed
 		# # self.velocity = math.sqrt(square(vessel.flight(vessel.orbit.body.non_rotating_reference_frame).speed) - square(vessel.flight(vessel.orbit.body.non_rotating_reference_frame).vertical_speed))
 		# self.verticalVelocity = vessel.flight(vessel.orbit.body.non_rotating_reference_frame).vertical_speed
-		self.angle = numpy.arctan2(self.velocity(), self.verticalVelocity())
+		self.angle = numpy.arctan2(self.velocity, self.verticalVelocity)
 		self.thrust = 0.0
 		for engine in self.engineList:
-			self.thrust  = self.thrust + engine.engine.max_thrust
+			self.thrust  = self.thrust + engine.thrust
 		self.acceleration = self.thrust / vessel.mass
 		if self.isp <= 0:
 			self.isp = self.StageVacuumSpecificImpulse(self.insertionStage)
@@ -143,16 +150,16 @@ class PEG(object):
 
 	def peg(self, oldA, oldB, oldT, deltaTime = 0):
 		# print "peg oldA: {0}, oldB: {1}, oldT {2}".format(oldA, oldB, oldT)
-		deltaTime = self.cycleRate# + 0.15
+		deltaTime = self.cycleRate# + 0.5
 		tau = self.exhaustVelocity / self.acceleration
 		# print "tau: {0}".format(tau)
 		A=B=C=T=0
 
 		if oldA == 0 and oldB == 0:
-			oldA, oldB = self.msolve(tau, oldT, self.targetOrbit - (self.altitude() + 6371000.0))
+			oldA, oldB = self.msolve(tau, oldT, self.targetOrbit - self.altitude())
 
 		# angular momentum
-		angM = numpy.linalg.norm(numpy.cross([(self.altitude() + 6371000.0), 0, 0], [self.verticalVelocity(), self.velocity(), 0]))
+		angM = numpy.linalg.norm(numpy.cross([self.altitude(), 0, 0], [self.verticalVelocity(), self.velocity(), 0]))
 		# print "angM: {0}".format(angM)
 		tgtV = numpy.sqrt(self.mu/self.targetOrbit)
 		# print "tgtV: {0}".format(tgtV)
@@ -166,7 +173,7 @@ class PEG(object):
 		# print "C: {0}".format(C)
 		frt = oldA + oldB * oldT + C
 		# print "frt: {0}".format(frt)
-		C = (self.mu / square((self.altitude() + 6371000.0)) - square(self.velocity()) / (self.altitude() + 6371000.0)) / self.acceleration
+		C = (self.mu / square(self.altitude()) - square(self.velocity()) / self.altitude()) / self.acceleration
 		# print "C: {0}".format(C)
 		fr = oldA + C
 		# print "fr: {0}".format(fr)
@@ -182,7 +189,7 @@ class PEG(object):
 		# print "ftdd: {0}".format(ftdd)
 
 		# deltaV and T, time to burn out
-		avgR = ((self.altitude() + 6371000.0) + self.targetOrbit) / 2
+		avgR = (self.altitude() + self.targetOrbit) / 2
 		# print "avgR: {0}".format(avgR)
 		# print "exhaustVelocity: {0}".format(self.exhaustVelocity)
 		# print "oldT: {0}".format(oldT)
@@ -194,10 +201,12 @@ class PEG(object):
 		T = tau * (1 - numpy.exp((-dv/self.exhaustVelocity)))
 		# print "T: {0}".format(T)
 
-		if T >= self.epsilon:
-			A, B = self.msolve(tau, oldT, self.targetOrbit - (self.altitude() + 6371000.0))
+		if T >= self.epsilon * peg.cycleRate:
+			A, B = self.msolve(tau, oldT, self.targetOrbit - self.altitude())
 		else:
 			A = oldA
 			B - oldB
 
 		return (A, B, C, T)
+
+

@@ -7,8 +7,9 @@ import argparse
 import sys
 import curses
 import os
-import utility
+# import utility
 import numpy
+import Launch_Manager
 
 parser = argparse.ArgumentParser(description='Handles rocket ascent, gravity turn, and insertion into orbit')
 parser.add_argument('--ignition-time', "-ignition", type=int, dest='ignitionTime', default=5)
@@ -19,7 +20,8 @@ parser.add_argument('--liftoff-twr', '-twr', type=float, dest='liftoffTWR', defa
 parser.add_argument('--thrust-req', '-thrust', type=float, dest='thrustThreshold', default=0.99)
 parser.add_argument('--turn-start', '-turn', type=float, dest='turnStart', default=90)
 parser.add_argument('--target-ap', '-ap', type=float, dest='targetAP', default=185000.00)
-parser.add_argument('--max-pitchmod', '-maxpitch', type=float, dest='maxPitchMod', default=30.00)
+parser.add_argument('--target-inclination', '-inc', type=float, dest='targetInclination', default=28.7)
+parser.add_argument('--pitch-rate', '-pitch', type=float, dest='pitchRate', default=1.45)
 parser.add_argument('--insertion-stage', '-ostage', type=int, dest='insertionStage', default=-1)
 parser.add_argument('--peg-loop-time', '-looptime', type=float, dest='loopTime', default=1.0)
 parser.add_argument('--server', '-server', type=str, dest='serverIP', default=None)
@@ -52,29 +54,9 @@ vessel.control.sas = False
 vessel.control.rcs = False
 vessel.control.throttle = 1
 # FlightData utility
-fd = utility.FlightData(vessel)
-
-if args.insertionStage == -1:
-	# best guess to determine which stage is the insertion stage.  
-	# This will assume a two stage vehicle with the second stage being the insertion stage
-	print "Trying to auto-detect insertion stage (assumes two stage vehicle)..."
-	# this will essentially start at the bottom of the rocket, and walk up each stage with engines in it
-	# It will attempt to ignore ullage/retros by looking at stage burn time
-	stageToCheck = vessel.control.current_stage
-	stagesFound = 0
-	stageTarget = 2
-	if args.useBoosters:
-		stageTarget = 3
-	while stageToCheck >= 0:
-		bt = fd.StageBurnTime(stageToCheck)
-		print "\tStage {0} burn time {1} seconds".format(stageToCheck, bt)
-		if bt > 30:
-			stagesFound += 1
-		if stagesFound == stageTarget:
-			args.insertionStage = stageToCheck
-			print "Stage {0} detected as insertion stage.  If this is not correct, then manually specify insertion stage with the --insertion-stage paramaeter".format(args.insertionStage)
-			break
-		stageToCheck -= 1
+# fd = utility.FlightData(vessel)
+lm = Launch_Manager.LaunchManager(args.targetAP, args.targetInclination)
+lm.pitchRate = args.pitchRate
 
 
 allEngineParts = vessel.parts.with_module("ModuleEnginesRF")
@@ -183,20 +165,20 @@ previousFlightData = {
 }
 currentFlightData = dict(previousFlightData)
 # PEG test
-peg = utility.PEG(vessel, connection, args.targetAP, args.loopTime, args.insertionStage) # target a 185km orbit
+# peg = utility.PEG(vessel, connection, args.targetAP, args.loopTime, args.insertionStage) # target a 185km orbit
 print "Initial PEG Update"
-peg.updateState(vessel, connection)
+# peg.updateState(vessel, connection)
 pegInit = False
-stageBurnTime = fd.StageBurnTime(args.insertionStage)
+# stageBurnTime = fd.StageBurnTime(args.insertionStage)
 A=B=C=0
-T = stageBurnTime
 pegStartup = 0
 lastTime = ut()
 pegTime = 0
 pegEstimation = pegGuidance = pegConvergenceFactor = 0.0
 rollComplete = False
 # vessel.auto_pilot.target_roll = 0
-while not inOrbit:
+currentMode = "PreLauch"
+while currentMode != "Orbit":
 	deltaTime = ut() - lastTime
 	pegTime += deltaTime
 	lastTime = ut()
@@ -222,44 +204,9 @@ while not inOrbit:
 	elif currentFlightData['surfaceSpeed'] >= args.turnStart:# and currentFlightData['surfaceSpeed'] < 1000.0:
 		currentMode = "PITCH PROGRAM MOD1"
 
-	# PEG overrides all else
 	if vessel.control.current_stage <= args.insertionStage:
-		if pegStartup > 5:
-			currentMode = 'PEG'
-		else:
-			pegStartup += deltaTime
-
-	# if currentMode == "PEG":
-	peg.updateState(vessel, connection)
-
-	if currentMode == "PEG" and pegTime >= peg.cycleRate:
-		if not pegInit:
-			print "PEG init"
-			p = peg.peg(0, 0, stageBurnTime)
-			pegInit = True
-		else:
-			print "PEG Loop"
-			p = peg.peg(A, B, T, pegTime)
-
-		pegEstimation = abs(T - 2 * peg.cycleRate)
-		pegGuidance = p[3]
-		pegConvergenceFactor = abs(pegEstimation / pegGuidance - 1)
-		if pegConvergenceFactor < 0.02:
-			peg.convergedGuidanceSamples += 1
-			if peg.convergedGuidanceSamples >= 3:
-				peg.guidanceConverged = True
-		else:
-			peg.guidanceConverged = False
-
-		A = p[0]
-		B = p[1]
-		C = p[2]
-		T = p[3]
-
-		if T <= 0:#peg.cycleRate:
-			inOrbit = True
-	else:
-		p = [0, 0, 0, stageBurnTime]		
+		lm.onInsertionStage = True
+		currentMode = "INSERTION"
 
 	# Data blocks
 	os.system('cls' if os.name == 'nt' else 'clear')
@@ -277,6 +224,11 @@ while not inOrbit:
 		print "Velocity:", orbitalSpeed()
 		print "Apoapsis: {0}m".format(round(currentFlightData['apoapsis'], 2))
 		print "Periapsis: {0}m".format(round(currentFlightData['periapsis'], 2))
+		print "AP dV: {0:.2f}m/s".format(lm.target_apoapsis_speed_dv())
+		print "Circ dV: {0:.2f} m/s".format(lm.circ_dv())
+		print "Circularization time {0:.2f}s".format((lm.maneuver_burn_time(lm.circ_dv())))
+		print "Mean anomaly: {0:.2f}".format(lm.mean_anomaly())
+
 		# print "Thrust: {0}kN".format(vessel.thrust * 1000.0)
 		# print "Max Thrust: {0}kN".format(vessel.max_thrust * 1000.0)
 		# print "Available Thrust: {0}kN".format(vessel.available_thrust * 1000.0)
@@ -285,42 +237,13 @@ while not inOrbit:
 	print "FLIGHT"
 	print "======"
 	# print "Thrust {0}n / Max Thrust {1}n ({1}%)".format(vessel.thrust, vessel.max_thrust, vessel.thrust / vessel.max_thrust)
-	print "Pitch set: {0} degrees".format(round(currentFlightData['pitch'],2))
-	print "Pitch mod: {0} degrees".format(round(currentFlightData['pitchMod'],2))
+	print "Pitch set: {0:.2f} degrees".format(lm.pitchSet)
+	print "Pitch mode: {0}".format(lm.pitchMode)
+	# print "Pitch mod: {0:.2f} degrees".format(currentFlightData['pitchMod'])
 	# print "Target Roll: {0:.2f}".format(vessel.auto_pilot.target_roll)
 	# print "Roll Error: {0:.2f}".format(vessel.auto_pilot.roll_error)
 	# print "Isp: {0} s".format(fd.StageVacuumSpecificImpulse(vessel.control.current_stage))
 	print ""
-
-	# if currentMode == "PEG":
-	print ""
-	print "Time Delta: {0:.2f}s".format(deltaTime)
-	print "Navigation"
-	print "=========="
-	print "Altitude: {0} meters".format(peg.altitude())
-	print "Velocity: {0} m/s".format(peg.velocity())
-	print "Vertical Velocity: {0} m/s".format(peg.verticalVelocity())
-	print "Angle: {0}".format(peg.angle)
-	print "Thrust: {0} n".format(peg.thrust)
-	# print "Mass: {0} kg".format(vessel.mass)
-	print "Acceleration: {0} m/s".format(peg.acceleration)
-	print "Isp: {0} s".format(peg.isp)
-	print "Exhaust Velocity: {0} m/s".format(peg.exhaustVelocity)
-	print ""
-	print "Guidance"
-	print "==="
-	print "A:", A
-	print "B:", B
-	print "C:", C
-	print "Time to cutoff (Guidance): {0} seconds".format(T)
-	if currentMode == "PEG":
-		print "Time to cutoff (Estimation): {0} seconds".format(pegEstimation)
-		print "Convergence factor: {0}".format(pegConvergenceFactor)
-	# print "Convergence: {0}".format(peg.convergedGuidanceSamples)
-		if peg.guidanceConverged:
-			print "Guidance is converged."
-		if T < peg.epsilon * peg.cycleRate:
-			print "Guidance locked"
 
 	# Determine base pitch.  This is calculated to get us to 45 degrees at roughly 1km/s (1083 m/s to be exact) and 0 pitch close to orbital speed (7848 m/s to be exact)
 	if currentMode not in ["ASCENT", "PEG"]:
@@ -329,7 +252,8 @@ while not inOrbit:
 		else:
 			speed = currentFlightData['orbitalSpeed']
 		# currentFlightData['pitch'] = 90 - 1.4 * pow((surfaceSpeed() - 45),0.5)
-		currentFlightData['pitch'] = 90 - 2.5 * pow( (speed - 45), 0.4 )
+		# currentFlightData['pitch'] = 90 - 2.5 * pow( (speed - 45), 0.4 )
+		lm.pitch_and_heading()
 	# if not currentFlightData['targetApoapsisHit']:
 	# 	if currentFlightData['apoapsis'] >= args.targetAP:
 	# 		currentFlightData['targetApoapsisHit'] = True
@@ -348,34 +272,11 @@ while not inOrbit:
 	# 		print "PITCH MOD - TTAP - Pitch Down"
 	# 		currentFlightData['pitchMod'] -= 1.0
 
-	# If we are in PEG mode, we first need to see if guidance has converged
-	# and if it has, we use the PEG guidance for pitch
-	if currentMode == "PEG" and pegTime >= peg.cycleRate:
-		if peg.guidanceConverged:
-			currentFlightData['pitchMod'] = 0.0
-			currentFlightData['pitch'] = A + (B * pegTime) + C
-			currentFlightData['pitch'] = max(-1, min(currentFlightData['pitch'], 1))
-			currentFlightData['pitch'] = numpy.arcsin(currentFlightData['pitch']).item()
-			currentFlightData['pitch'] *= 90
-			currentFlightData['pitch'] = min(90, currentFlightData['pitch'])
-			currentFlightData['pitch'] = max(-90, currentFlightData['pitch'])
-
-
-	# apply pitch and pitch mod
-	if currentMode not in ["ASCENT"]:
-		if currentFlightData['pitchMod'] < -args.maxPitchMod:
-			currentFlightData['pitchMod'] = -args.maxPitchMod
-		if currentFlightData['pitchMod'] > args.maxPitchMod:
-			currentFlightData['pitchMod'] = args.maxPitchMod
-		finalPitchAngle = currentFlightData['pitch'] + currentFlightData['pitchMod']
-		# vessel.auto_pilot.target_roll = 0
-		vessel.auto_pilot.target_pitch_and_heading(finalPitchAngle, 90)
+	if (lm.circ_dv() < 10) or (lm.orbital_period(lm.target_orbit_alt + lm.radius_eq, lm.mu) < lm.period()):
+		currentMode = "Orbit"
 
 	# store current flight data as last flight data for use next loop
 	previousFlightData = dict(currentFlightData)
-
-	if pegTime >= peg.cycleRate:
-		pegTime = 0.0
 
 	# sleepTime = args.loopTime - pegTime
 	# print "Remaning sleep time {0}".format(sleepTime)
